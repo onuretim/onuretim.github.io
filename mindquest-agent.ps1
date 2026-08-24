@@ -376,6 +376,42 @@ function Test-Administrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+<#
+    Puts the agent at its installed location.
+
+    Exists because of a bug that made installation fail for every single
+    user. The .bat downloads the agent to
+    C:\ProgramData\MindQuest\mindquest-agent.ps1 and then runs it with
+    -Install, at which point $PSCommandPath and $target are the same file -
+    and Copy-Item refuses to overwrite a file with itself. Under
+    $ErrorActionPreference = 'Stop' that threw, so the scheduled task was
+    never registered and config.json was never written, while the calling
+    .bat carried on and printed uninstall instructions for something that
+    had not been installed.
+
+    Being already in place is success, not an error. Saying so is the whole
+    fix.
+#>
+function Copy-AgentTo {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Target
+    )
+
+    # Compare resolved paths, so C:\ProgramData\... and a differently-cased
+    # or relative route to the same file are recognised as identical.
+    $sourceFull = try { (Resolve-Path -LiteralPath $Source).Path } catch { $Source }
+    $targetFull = try { (Resolve-Path -LiteralPath $Target).Path } catch { $Target }
+
+    if ($sourceFull -eq $targetFull) {
+        Write-Host '  agent is already in place' -ForegroundColor DarkGray
+        return
+    }
+
+    Copy-Item -LiteralPath $sourceFull -Destination $targetFull -Force
+    Write-Host "  installed the agent to $targetFull" -ForegroundColor DarkGray
+}
+
 function Install-Agent {
     param([Parameter(Mandatory)][string]$ConfigId, [Parameter(Mandatory)][string]$ApiUrl)
 
@@ -387,7 +423,7 @@ function Install-Agent {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 
     $target = Join-Path $installDir 'mindquest-agent.ps1'
-    Copy-Item -Path $PSCommandPath -Destination $target -Force
+    Copy-AgentTo -Source $PSCommandPath -Target $target
 
     @{ configId = $ConfigId; apiUrl = $ApiUrl } | ConvertTo-Json |
         Set-Content -Path (Join-Path $installDir 'config.json') -Encoding utf8
@@ -402,6 +438,13 @@ function Install-Agent {
                            -Principal $principal -Settings $settings -Force | Out-Null
 
     Start-ScheduledTask -TaskName $script:TaskName
+
+    # Confirm rather than assume. The previous version printed its success
+    # banner from the .bat that called it even when this function had
+    # already thrown, so a failed install looked exactly like a good one.
+    if (-not (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue)) {
+        throw "The startup task '$($script:TaskName)' was not registered. MindQuest is NOT installed."
+    }
 
     Write-Host ''
     Write-Host 'MindQuest is installed and running.' -ForegroundColor Green
@@ -531,7 +574,21 @@ if (-not $ConfigId) {
     exit 1
 }
 
-if ($Install) { Install-Agent -ConfigId $ConfigId -ApiUrl $ApiUrl; return }
+if ($Install) {
+    # Explicit exit code, so the calling .bat can tell success from failure
+    # with `if errorlevel 1`. Relying on PowerShell's implicit code for an
+    # unhandled terminating error is how the installer came to announce a
+    # successful install that never happened.
+    try {
+        Install-Agent -ConfigId $ConfigId -ApiUrl $ApiUrl
+        exit 0
+    }
+    catch {
+        Write-Host ''
+        Write-Host "Install failed: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
 
 if (-not (Test-Administrator)) {
     Write-Host 'This needs Administrator, because blocking edits the system hosts file.' -ForegroundColor Red

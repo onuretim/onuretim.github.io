@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Bare camera test</title></head>
+<body style="font-family: sans-serif; background: #111; color: #eee; padding: 2rem;">
+  <h1>Bare-bones camera test (no React, no app code)</h1>
+  <p>This page exists only to isolate whether camera access fails at the
+     browser/origin level, independent of any MindQuest app code.</p>
+  <button id="btn" style="font-size: 1.2rem; padding: 0.75rem 1.5rem;">Request Camera</button>
+  <pre id="out" style="margin-top:1rem; white-space: pre-wrap;"></pre>
+  <video id="v" autoplay playsinline muted style="margin-top:1rem; max-width: 400px; display:block;"></video>
+  <script>
+    document.getElementById('btn').addEventListener('click', async () => {
+      const out = document.getElementById('out');
+      out.textContent = 'Requesting...';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        document.getElementById('v').srcObject = stream;
+        out.textContent = 'SUCCESS: got a camera stream.';
+      } catch (err) {
+        out.textContent = 'FAILED: ' + err.name + ' — ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
